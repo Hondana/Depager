@@ -1,0 +1,37 @@
+%defext Depager::AfterErrContinueExtension
+%expanded_code_delimiter DEPAGER_EXPANDED_CODE
+%inner{
+  def init_extension
+    g_parser.outer_code << %{
+class Depager::LALR::Parser
+  def driver
+    while true
+      basis.action_value = action_table[stack.last][lookahead[0]] || defred_table[stack.last]
+      if action_value == nil
+        error
+        #
+      elsif action_value == ACC
+        if int_to_term[lookahead[0]] == nil   
+          accept
+          return true
+        else
+          error
+        end
+        #
+      elsif action_value > 0
+        shift
+        while v = defred_after_shift_table[stack.last]
+          basis.action_value = v
+          reduce
+        end
+        return false
+      else
+        reduce
+      end
+    end
+  end
+end
+    }; #code
+  end
+%}
+%%

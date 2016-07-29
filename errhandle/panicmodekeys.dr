@@ -1,0 +1,42 @@
+%defext Depager::KeyExtension
+%extend Depager::Lexer ('plugins/lex.rb')
+%extend Depager::Action ('plugins/action.rb')
+%decorate @Action
+%expanded_code_delimiter DEPAGER_EXPANDED_CODE
+%hook pre_rule_list /%PanicMode_KEYS\{\s*\Z/ skip
+%banner '%PanicMode_KEYS{ ... }'
+%%
+%LEX{
+  /%\}/         { yield token(nil, nil) }
+  /,/           { yield token(:COMMA, $&) }
+  /[a-zA-Z][a-zA-Z0-9_]*/
+                { yield token(:IDENT, $&) }
+  /\s+/, /\#.*/ {}
+  /./           { yield token($&, $&) }
+%}
+#{ # <-for-editor
+#begin-rule
+  start:
+      keylist
+      { g_parser.inner_code << %{\nPanicMode_KEYS = [ #{ _keylist } ]\n}; }
+  ;
+
+  keylist:
+      key keyloop
+      { _key + _keyloop }
+    | { "" }
+  ;
+
+  keyloop:
+      COMMA key keyloop
+      { ", " + _key + _keyloop }
+    | { "" }
+  ;
+
+  key:
+      IDENT
+      { ":#{_IDENT .value}" }
+  ;
+
+#end-rule
+%%

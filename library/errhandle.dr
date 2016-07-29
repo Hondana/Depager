@@ -1,0 +1,93 @@
+%defext Depager::ErrHandleExtension
+%expanded_code_delimiter DEPAGER_EXPANDED_CODE
+%inner{
+  def init_extension
+    g_parser.inner_code << %{
+attr_accessor :errshow
+alias err_ext_basis_initialize initialize
+def initialize *args
+  err_ext_basis_initialize *args
+  @errshow = true
+end
+alias show_error_message error
+def error
+  show_error_message if @errshow
+end
+    }; #code
+    g_parser.outer_code << %{
+class Depager::LALR::Parser
+  def token sym, value = nil, lineno = nil
+    basis.__send__ :token, sym, value, lineno
+  end
+  #
+  def each_term
+    i = 2
+    while int_to_term[i]
+      yield i
+      i += 1
+    end
+  end
+  def each_nonterm
+    i = 0
+    while int_to_nonterm[i]
+      yield i
+      i += 1
+    end
+  end
+  def simple_stack stack = basis.stack
+    stack.select.with_index{|s, i| i.even?}
+  end
+  def follow n
+    result = []
+    checked = {}
+    if n > 1 # term
+      action_table.collect{|a| a[n]}.compact.each do |v|
+        result.concat(expected_tokens(v, checked)) if v != ACC
+      end
+    elsif n <= 0 # nonterm
+      goto_table.collect{|g| g[-n]}.compact.each do |v|
+        result.concat(expected_tokens(v, checked))
+      end
+    end
+    result.uniq
+  end
+  def expected_tokens id = stack.last, checked = {}
+    return [] if checked[id]
+    checked[id] = true
+    result = []
+    action_table[id].each_with_index{|a, i| result << i if a}
+    if defred_table[id]
+      r = reduce_table[-defred_table[id]][0]
+      goto_table.each{|g| result.concat(expected_tokens(g[r], checked)) if g[r]}
+    end
+    result.uniq
+  end
+  def expected_tokens_stack sstack = simple_stack
+    result = []
+    id = sstack.last
+    action_table[id].each_with_index{|a, i| result << i if a}
+    if defred_table[id]
+      r, x = reduce_table[-defred_table[id]]
+      new_stack = sstack[0, sstack.size - x]
+      new_stack << goto_table[new_stack.last][r]
+      result.concat(expected_tokens_stack(new_stack))
+    end
+    result.uniq
+  end
+end
+
+class Depager::LALR::ErrHandleParser < Depager::LALR::AdvancedParser
+  def errhandle
+    basis.stack = @last_stack if @last_stack
+  end
+  def after_error
+    errhandle
+  end
+  def after_shift
+    @last_stack = stack.clone
+  end
+end
+    }; #code
+  end
+%}
+%%

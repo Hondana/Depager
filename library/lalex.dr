@@ -1,0 +1,175 @@
+%defext Depager::LookAheadLexerExtension
+%extend Depager::Action ('plugins/action.rb')
+%decorate @Action
+%expanded_code_delimiter DEPAGER_EXPANDED_CODE
+%hook pre_rule_list /%LEX\{\s*\Z/ skip
+%banner '%LEX{ ... }'
+%inner{
+  def lex
+    until @file.eof?
+      until @line.empty?
+        case @line
+        when /\A\s+/
+          #skip blank
+        when /\A%\}\s*\Z/
+          @line = $'
+          yield nil,nil
+        when /\A\/(([^\/\\]+|\\.)*)\//
+          yield :LEX, "/\\A#{$1}/"
+        when /\A'([^'\\]+|\\.)*'/, /\A"([^"\\]+|\\.)*"/
+          rest = $'
+          str = Regexp.escape($1).gsub('/', '\/')
+          rest.match(/^/)
+          yield :LEX, "/\\A#{str}/"
+        when /\A\{/
+          yield :ACTION, parse_block
+          /./=~'.'
+        when /\A(.)/
+          yield $&, $&
+        else
+          raise RuntimeError, "must not happen #{line}"
+        end
+        @line = $'
+      end
+      @original_line = @line = file.gets
+    end
+    yield nil, nil
+  end
+%}
+%%
+
+#begin-rule
+  start:
+      lexactlist
+      {
+        g_parser.inner_code << %{
+          attr_accessor :la_array
+          alias lalex_initialize initialize
+          def initialize *args
+            lalex_initialize *args
+            @la_array = []
+          end
+          #
+          def intform sym, val
+            [term_to_int[sym] || term_to_int[false], val]
+          end
+          #
+          def lex_getline
+            @original_line = @line = file.gets
+          end
+          def lex_getline_if_need
+            lex_getline while @line && @line.empty?
+          end
+          def lex_eof?
+            lex_getline_if_need
+            @line.nil?
+          end
+          def lex_eoa?
+            @la_array.empty?
+          end
+          def lex_last_element
+            lex_eoa? ? @lookehead[0] : @la_array.last[0]
+          end
+          #
+          def lex &block
+            lex_no_loop(&block) until lex_eof? && lex_eoa?
+            yield nil, nil
+          end
+          def lex_no_loop &block
+            lex_eoa? ? lex_from_file(&block) : lex_from_array(&block)
+          end
+          def lex_from_array &block
+            if lex_eoa?
+              yield nil, nil if lex_last_element != term_to_int[nil]
+              return
+            end
+            e = @la_array.shift
+            yield int_to_term[e[0]], e[1]
+          end
+          def lex_from_file &block
+            if lex_eof?
+              yield nil, nil if lex_last_element != term_to_int[nil]
+              return
+            end
+            case @line
+              #{ _lexactlist }
+            else
+              raise RuntimeError, "must not happen \#{@line}"
+            end
+          end
+          #
+          def lex_to_array
+            return if lex_eof? && lex_last_element == term_to_int[nil]
+            last_size = @la_array.size
+            lex_from_file{|sym, val| @la_array << intform(sym, val) } while @la_array.size == last_size
+          end
+          def lex_to_array_until array_size
+            nsyms = array_size - @la_array.size
+            nsyms.times{ lex_to_array } if nsyms > 0
+          end
+          def lex_read_element index
+            return @lookahead if index == 0
+            lex_to_array_until index
+            @la_array[index - 1]
+          end
+          def lex_read index
+            e = lex_read_element index
+            e ? e[0] : nil
+          end
+          #
+          def lex_insert item, index
+            e = intform item[0], item[1]
+            if index == 0
+              @la_array.unshift @lookahead
+              @lookahead = e
+            else
+              lex_to_array_until index - 1
+              @la_array.insert index - 1, e
+            end
+          end
+          def lex_delete index
+            if index == 0
+              lex_no_loop{|sym, val| @lookahead = intform(sym, val) }
+            else
+              lex_to_array_until index
+              @la_array.delete_at index - 1
+            end
+          end
+          def get_tokens until_index = nil
+            lex_to_array_until until_index if until_index
+            lex_insert token(nil), 0
+            result = basis.la_array.clone
+            lex_delete 0
+            return result
+          end
+          def replace_tokens tokens
+            @la_array = tokens.clone
+            lex_delete 0
+          end
+        }; #code
+      }
+  ;
+  lexactlist:
+      lexact            { _lexact }
+    | lexactlist lexact { _lexactlist << _lexact }
+  ;
+  lexact:
+      lexlist opt_noskip ACTION
+      {
+        %{
+          when #{_lexlist.join(', ')}
+            #{ _opt_noskip ? '#' : "@line = $'" }
+            #{ _ACTION }
+        }; #code
+      }
+  ;
+  opt_noskip:
+                        { false }
+    | '!'               { true  }
+  ;
+  lexlist:
+      LEX               { [ _LEX ] }
+    | lexlist ',' LEX   { _lexlist << _LEX }
+  ;
+#end-rule
+%%

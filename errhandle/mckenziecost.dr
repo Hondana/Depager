@@ -1,0 +1,45 @@
+%defext Depager::MckenzieCostExtension
+%extend Depager::Lexer ('plugins/lex.rb')
+%extend Depager::Action ('plugins/action.rb')
+%decorate @Action
+%expanded_code_delimiter DEPAGER_EXPANDED_CODE
+%hook pre_rule_list /%COST\{\s*\Z/ skip
+%banner '%COST{ ... }'
+%%
+%LEX{
+  /%\}/         { yield token(nil, nil) }
+  /,/           { yield token(:COMMA, $&) }
+  /\d+/         { yield token(:COST, $&) }
+  /\:[A-Z][A-Z0-9_]*/
+                { yield token(:SYMBOL, $&) }
+  /\s+/, /\#.*/ {}
+%}
+#begin-rule
+  start:
+      costs
+      {
+        ins = ""
+        del = ""
+        i = 0
+        while _costs[i]
+          ins << "\n#{_costs[i]} => #{_costs[i + 1]},"
+          del << "\n#{_costs[i]} => #{_costs[i + 2]},"
+          i += 3
+        end
+        g_parser.inner_code << %{
+          INSERTION_COST = {#{ ins }
+          }
+          DELETION_COST  = {#{ del }
+          }
+        }; #code
+      }
+  ;
+  costs:
+      cost costs { _cost + _costs }
+    | { [] }
+  ;
+  cost:
+      SYMBOL COST COMMA COST { [ val[0].value, val[1].value, val[3].value ] }
+  ;
+#end-rule
+%%
